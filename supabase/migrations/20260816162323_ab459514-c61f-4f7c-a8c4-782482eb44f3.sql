@@ -1,0 +1,207 @@
+CREATE TYPE public.app_role AS ENUM ('gm','viewer');
+
+CREATE TABLE public.user_roles (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  role public.app_role NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, role)
+);
+GRANT SELECT ON public.user_roles TO authenticated;
+GRANT ALL ON public.user_roles TO service_role;
+ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "users read own roles" ON public.user_roles FOR SELECT TO authenticated USING (user_id = auth.uid());
+
+CREATE OR REPLACE FUNCTION public.has_role(_user_id uuid, _role public.app_role)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (SELECT 1 FROM public.user_roles WHERE user_id = _user_id AND role = _role)
+$$;
+
+CREATE OR REPLACE FUNCTION public.set_updated_at() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN NEW.updated_at = now(); RETURN NEW; END; $$;
+
+CREATE TABLE public.game_state (
+  id int PRIMARY KEY DEFAULT 1,
+  current_year int NOT NULL DEFAULT 2500,
+  currency_code text NOT NULL DEFAULT 'C$',
+  bureau_name text NOT NULL DEFAULT 'Bureau of Statistics',
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT game_state_single_row CHECK (id = 1)
+);
+GRANT SELECT ON public.game_state TO anon, authenticated;
+GRANT ALL ON public.game_state TO service_role;
+ALTER TABLE public.game_state ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "game state public read" ON public.game_state FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "gm updates game state" ON public.game_state FOR UPDATE TO authenticated USING (public.has_role(auth.uid(),'gm')) WITH CHECK (public.has_role(auth.uid(),'gm'));
+INSERT INTO public.game_state (id, current_year) VALUES (1, 2500);
+
+CREATE TABLE public.nations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  acronym text NOT NULL UNIQUE,
+  name text NOT NULL,
+  parent_acronym text,
+  sort_order int NOT NULL DEFAULT 0,
+  map_x numeric, map_y numeric,
+  inflation_rate numeric, inflation_ratio numeric, ppp_conversion numeric,
+  gdp_nominal numeric, gdp_real numeric, gdp_ppp numeric, growth_rate numeric,
+  revenue numeric, expenditures numeric, net_income numeric, treasury numeric, debt numeric,
+  population numeric, pop_growth numeric, migration numeric, gdp_per_capita numeric,
+  debt_treasury_ratio numeric, revenue_gdp_ratio numeric, credit_score_tri numeric,
+  credit_rating text, notes text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT ON public.nations TO anon, authenticated;
+GRANT ALL ON public.nations TO service_role;
+ALTER TABLE public.nations ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "nations public read" ON public.nations FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "gm writes nations" ON public.nations FOR ALL TO authenticated USING (public.has_role(auth.uid(),'gm')) WITH CHECK (public.has_role(auth.uid(),'gm'));
+CREATE TRIGGER nations_updated BEFORE UPDATE ON public.nations FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE TABLE public.commodities (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL UNIQUE,
+  category text NOT NULL,
+  unit text,
+  base_price numeric,
+  current_price numeric,
+  previous_price numeric,
+  sort_order int NOT NULL DEFAULT 0,
+  notes text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT ON public.commodities TO anon, authenticated;
+GRANT ALL ON public.commodities TO service_role;
+ALTER TABLE public.commodities ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "commodities public read" ON public.commodities FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "gm writes commodities" ON public.commodities FOR ALL TO authenticated USING (public.has_role(auth.uid(),'gm')) WITH CHECK (public.has_role(auth.uid(),'gm'));
+CREATE TRIGGER commodities_updated BEFORE UPDATE ON public.commodities FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE TABLE public.rulings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  year int NOT NULL,
+  title text NOT NULL,
+  body text,
+  effects jsonb NOT NULL DEFAULT '[]'::jsonb,
+  status text NOT NULL DEFAULT 'draft',
+  applied_at timestamptz,
+  created_by uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT ON public.rulings TO anon, authenticated;
+GRANT ALL ON public.rulings TO service_role;
+ALTER TABLE public.rulings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "rulings public read applied" ON public.rulings FOR SELECT TO anon USING (status = 'applied');
+CREATE POLICY "auth read rulings" ON public.rulings FOR SELECT TO authenticated USING (true);
+CREATE POLICY "gm writes rulings" ON public.rulings FOR ALL TO authenticated USING (public.has_role(auth.uid(),'gm')) WITH CHECK (public.has_role(auth.uid(),'gm'));
+CREATE TRIGGER rulings_updated BEFORE UPDATE ON public.rulings FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE TABLE public.year_snapshots (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  year int NOT NULL,
+  kind text NOT NULL,
+  ref_id uuid NOT NULL,
+  data jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (year, kind, ref_id)
+);
+GRANT SELECT ON public.year_snapshots TO anon, authenticated;
+GRANT ALL ON public.year_snapshots TO service_role;
+ALTER TABLE public.year_snapshots ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "snapshots public read" ON public.year_snapshots FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "gm writes snapshots" ON public.year_snapshots FOR ALL TO authenticated USING (public.has_role(auth.uid(),'gm')) WITH CHECK (public.has_role(auth.uid(),'gm'));
+
+INSERT INTO public.nations (acronym,name,parent_acronym,sort_order,map_x,map_y,inflation_rate,inflation_ratio,ppp_conversion,gdp_nominal,gdp_real,gdp_ppp,growth_rate,revenue,expenditures,net_income,treasury,debt,population,pop_growth,migration,gdp_per_capita,debt_treasury_ratio,revenue_gdp_ratio,credit_score_tri,credit_rating) VALUES
+('USA','United States of Adramis',NULL,0,24.0,32.0,0.02795372458,0.7423078782,0.838236727,23039999909780.0,13223839596921.0,19312974115289.0,0.0514640595,NULL,NULL,1211074329293.0,8542453516909.0,0.0,61036817.34,0.0226,4200000.0,316415.1566,-0.3707662131,0.0,992.0,'AA-'),
+('USA - SLT','Selenar Territory','USA',1,NULL,NULL,0.001,0.01510545637,1.438733724,100000000000.0,98511932305.0,143873372382.0,NULL,NULL,NULL,NULL,0.0,0.0,0.0,NULL,NULL,NULL,0.0,0.0,NULL,NULL),
+('USA - LIB','United States of Adramis','USA',2,21.0,36.0,0.028,0.7477658841,0.8356190418,22939999909780.0,13125327664616.0,19169100742907.0,0.0517,2158886504395.0,1780672175102.0,378214329293.0,4865230039427.0,0.0,0.0,NULL,NULL,NULL,-0.2120850069,0.1126232541,NULL,NULL),
+('USA - WNX','Wanax Administrative Zone','USA',3,17.0,30.0,0.0,0.0,NULL,0.0,NULL,NULL,NULL,NULL,NULL,NULL,0.0,0.0,0.0,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+('USA - AG','Aeston Group','USA',4,28.0,28.0,0.0,0.0,NULL,0.0,0.0,NULL,0.0,NULL,NULL,832860000000.0,4164300000000.0,NULL,0.0,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+('ATS','Alterran Ascendancy',NULL,5,52.0,20.0,0.0,-0.01,1.47521864,1383947945625.0,1397927217803.0,2041625805773.0,-0.09,NULL,NULL,190650000000.0,3808600000000.0,0.0,7189187.325,0.06,NULL,NULL,-2.751982119,0.0,NULL,NULL),
+('NSM','Nusanium',NULL,6,80.0,58.0,0.0,0.01,1.446006389,387000000000.0,383168316832.0,559604472705.0,0.0,NULL,NULL,0.0,0.0,0.0,2514326.037,0.01,NULL,222566.3914,0.0,0.0,NULL,NULL),
+('EGY','Egypt',NULL,7,56.0,38.0,0.042,0.5373027233,0.9500187772,1645468903731.0,1070361015299.0,1563226355777.0,0.086,216558699514.0,196527515099.0,20031184415.0,432761528086.0,0.0,65506301.89,0.039,0.0,23863.75525,-0.2630019486,0.1385331681,630.7,'AA+'),
+('NUS','Nusantara',NULL,8,75.0,55.0,0.029,0.7833572666,0.8189421608,868022342756.0,486734968370.0,710860092958.0,0.117,NULL,NULL,27810000000.0,862110000000.0,0.0,702015627.2,0.02,NULL,1012.598674,-0.9931887205,0.0,400.0,'SD'),
+('MIA','Maarifan Industrial Alliance',NULL,9,60.0,30.0,0.0,0.0,NULL,0.0,0.0,0.0,0.0,12175000000000.0,9146500000000.0,3028500000000.0,-79500000000.0,0.0,0.0,0.0,NULL,NULL,NULL,NULL,600.0,'AAA'),
+('AFR','American Federal Republic',NULL,10,28.0,40.0,-0.004209075864,0.7471383007,0.8359192015,4013209549791.0,2297018815335.0,3354718922424.0,0.07253691985,688177607766.0,312000000000.0,376177607766.0,1036453793729.0,10945210000000.0,52343634.04,0.04255180726,0.0,64090.29453,3.004370442,0.2051371884,998.0,'CCC-'),
+('SAS','Sassanid Exile Government',NULL,11,60.0,36.0,0.0325,0.6969234136,0.8606554908,1557414349102.0,917787058986.0,1340397210934.0,0.0675,369859163435.0,220000000000.0,149859163435.0,202410515244.0,0.0,23056973.76,0.02,900000.0,58134.13438,-0.1299657444,0.2759325075,400.0,'A-'),
+('SSF','Sub Saharan Federation',NULL,12,53.0,52.0,0.0218,0.5625161528,0.9346888675,47632583050247.0,30484538008863.0,44521645106675.0,0.0676,3804770200982.0,3043816160786.0,760954040196.0,8208492218738.0,37710289033234.0,1074631794.0,0.024,NULL,41429.67421,0.6746808809,0.08545888616,400.0,'AA'),
+('EUR','European Union',NULL,13,49.0,24.0,0.0179305394,1.164197654,0.6748304392,19414212599323.0,8970628243639.0,13101301614973.0,0.07579776793,NULL,NULL,1207884219773.0,2611029720805.0,5806400000000.0,123457549.3,0.03814501974,100000.0,106119.8905,0.3087019737,0.0,400.0,'A-'),
+('EUR - FRA','Third French Empire','EUR',14,47.0,26.0,0.0151,1.262030578,0.6456439924,4513092863159.0,1995151129848.0,2913851294432.0,0.0546,965584704217.0,535410202825.0,430174501392.0,2295097627266.0,0.0,33267420.54,0.045,0.0,87588.73538,-0.508542079,0.3313774818,988.9975,'A'),
+('EUR - BKF','Balkan Federation','EUR',15,52.0,27.0,0.0126,0.7121267535,0.8530130438,2488706646622.0,1453576168652.0,2122899231651.0,0.082,796794480076.0,67075503200.0,729718976876.0,264761114271.0,3096000000000.0,17683697.87,0.045,100000.0,120048.3772,1.351997906,0.3753331615,989.0,'A-'),
+('EUR - BKF-TB','Balkan Federation - Terra Balkanica','EUR',16,53.0,29.0,0.0236,0.9080975878,0.7654044859,3452104501328.0,1809186554930.0,2642256271259.0,0.113,NULL,NULL,-15000000000.0,-270000000000.0,0.0,6977035.929,0.009,0.0,378707.5627,0.07821315951,0.0,NULL,NULL),
+('EUR - ENG','England','EUR',17,45.0,22.0,0.0296,3.439208567,0.328992529,823229691109.0,185445148304.0,270836418028.0,0.072,NULL,NULL,0.0,-180000000000.0,0.0,0.0,0.01,NULL,NULL,0.2186510058,0.0,NULL,'A'),
+('EUR - POL','Poland','EUR',18,52.0,23.0,0.0296,1.738069619,0.5333927389,2026754179236.0,740212800033.0,1081055962761.0,0.072,NULL,NULL,5875000000.0,-188075000000.0,466000000000.0,23885544.66,0.025,NULL,45259.84138,0.5238561729,0.0,NULL,'BBB+'),
+('EUR - GER','Germany','EUR',19,49.0,23.0,0.0196,1.277009878,0.6413966261,4935083858410.0,2167352854291.0,3165346136183.0,0.072,399501921963.0,342386180458.0,57115741505.0,689245979268.0,2244400000000.0,41643850.28,0.04,NULL,76009.92979,0.5693911114,0.1262111329,NULL,'A+'),
+('EUR - MIN','European Minor States','EUR',20,48.0,27.0,0.0196,0.8964564398,0.7701028205,1175240859458.0,619703587582.0,905056300660.0,0.0655,NULL,NULL,0.0,0.0,0.0,0.0,0.0,NULL,NULL,0.0,0.0,NULL,NULL),
+('VMS','Republic of Velmaris',NULL,21,33.0,58.0,0.01623298065,0.5257338438,0.9572222962,13102559906990.0,8587710078226.0,12542062480023.0,0.09181979234,5369258642562.0,3830229275586.0,1539029366976.0,3316175976778.0,0.0,136804254.0,0.03473501596,1200000.0,91678.89235,-0.2530937466,0.4281001351,1000.0,'A-'),
+('VMS - MR','Velmaris - Martian Enterprise','VMS',22,NULL,NULL,0.025,0.6314148407,NULL,0.0,0.0,0.0,0.0,NULL,NULL,0.0,NULL,0.0,908394.2625,0.0,NULL,NULL,NULL,NULL,NULL,NULL),
+('VMS - MN','Velmaris - Lunar Assets','VMS',23,NULL,NULL,0.02,0.5156663439,0.9635804471,1641927969.0,1083304367.0,1582129687.0,0.02,12028811.85,NULL,12028811.85,NULL,0.0,8237.332465,0.0049,NULL,192068.2082,0.0,0.007602924054,NULL,NULL),
+('VMS - VN','Velmaris - Venusian State','VMS',24,NULL,NULL,0.016,0.5333915008,0.9524419905,12208077175880.0,7961487440909.0,11627485325916.0,0.0955,534640823936.0,452500643527.0,82140180409.0,190752849841.0,0.0,132260507.3,0.026,1200000.0,87913.50922,-0.01562513466,0.04598077821,NULL,NULL),
+('VMS - TN','Velmaris - Teslan','VMS',25,31.0,64.0,0.016,0.4282268865,1.022573141,892840803141.0,625139332950.0,912995024420.0,0.044,30676632820.0,4600000000.0,26076632820.0,115324999072.0,0.0,3627115.172,0.02,NULL,251713.8225,-0.1291663628,0.0336,NULL,NULL),
+('VMS - ER - TR','Velmaris - Triangulite Corporation','VMS',26,NULL,NULL,0.0,0.0,NULL,0.0,0.0,0.0,0.0,5369246613750.0,3830229275586.0,1539017338164.0,NULL,0.0,0.0,0.0,NULL,NULL,NULL,NULL,NULL,'AA'),
+('TAT','Third Republic of Grand Tataria',NULL,27,65.0,20.0,0.024,0.4970704193,0.975549603,29727028806517.0,19856800603749.0,29000191151892.0,0.068,4850246699928.0,3881259781870.0,968986918058.0,12695472796468.0,2800000000000.0,1045113938.0,0.008,0.0,27748.35366,-0.3305172506,0.1672487838,309.0,'AA+'),
+('TAT-MR','Tataria - Mars','TAT',28,NULL,NULL,0.0,0.0,NULL,0.0,0.0,0.0,0.0,NULL,NULL,0.0,0.0,0.0,0.0,0.0,NULL,NULL,NULL,NULL,NULL,NULL),
+('TAT-AJ','Tataria - Al-Jawhar','TAT',29,NULL,NULL,0.0,0.0,NULL,0.0,0.0,0.0,0.0,NULL,NULL,0.0,0.0,0.0,0.0,0.0,NULL,NULL,NULL,NULL,NULL,NULL),
+('ANG','Angola',NULL,30,50.0,55.0,0.0212,0.6625794386,0.8784340882,95793925441012.0,57617653156691.0,84148649553945.0,0.04,14931069527506.0,11944855622005.0,2986213905501.0,17229861837826.0,1000000000000.0,1077084803.0,0.023,0.0,78126.29915,-0.167980093,0.1774368288,400.0,'AA'),
+('ANG-MN','Angola - Moon','ANG',31,NULL,NULL,0.0,0.0,NULL,0.0,0.0,0.0,NULL,NULL,NULL,0.0,0.0,0.0,0.0,0.0,NULL,NULL,NULL,NULL,NULL,NULL),
+('ANG-MR','Angola - Mars','ANG',32,NULL,NULL,0.0,0.0,NULL,0.0,0.0,0.0,0.0,NULL,NULL,0.0,0.0,0.0,0.0,0.0,NULL,NULL,NULL,NULL,NULL,NULL),
+('ANG-VN','Angola - Venus','ANG',33,NULL,NULL,0.001,0.01510545637,1.438733724,4660907145775.0,4591549692237.0,6705804294229.0,0.04,NULL,NULL,0.0,0.0,0.0,49000000.0,0.0,NULL,136853.1489,0.0,0.0,NULL,NULL),
+('HBE','Holy Britannian Empire',NULL,34,85.0,32.0,0.2327287242,0.4558850298,1.003146831,9368565688325.0,6434962580741.0,9398046977494.0,0.1665316995,2680555801018.0,971921058266.0,1708634742752.0,1997935290273.0,0.0,1059056300.0,0.0367099269,0.0,8873.982412,-0.2132594633,0.2852247714,906.02,'AA'),
+('HBE - JP','Crown of Yamato','HBE',35,88.0,30.0,0.027,0.4604664533,1.0,7896166212383.0,5406605673464.0,7896166212383.0,0.1688,2549177372555.0,832491737662.0,1716685634893.0,1783747296656.0,0.0,505144746.1,0.0375,-2000000.0,15631.49231,-0.2259004242,0.3228373497,906.02,'AA'),
+('HBE - NA','Crown of Britannia','HBE',36,45.0,20.0,0.037,0.3193093523,1.106993179,360048165113.0,272906551065.0,398570862720.0,0.075,36790582005.0,52800000000.0,-16009417995.0,150505105671.0,0.0,19045271.39,0.027,NULL,20927.54965,-0.4180138111,0.09230625077,906.02,'A'),
+('HBE - CN','Crown of Chūgoku','HBE',37,80.0,32.0,0.056,0.7179331186,0.8501299832,419716845459.0,244315009074.0,356813874793.0,0.21,54085864900.0,66922700000.0,-12836835100.0,102630533604.0,0.0,426468895.2,0.04,0.0,836.6703382,-0.2445232654,0.1515800498,906.02,'A'),
+('HBE - AUS/NZ','Crown of Yōkan-shū','HBE',38,88.0,68.0,0.02,0.171659381,1.246494055,98122705868.0,83746784654.0,122309369560.0,0.1379,9693973439.0,8530696626.0,1163276813.0,-67466592217.0,0.0,18197492.11,0.015,2000000.0,6721.22119,0.6875737029,0.07925781544,906.02,'BB+'),
+('HBE - KS','Crown of Kwongtung Kwok','HBE',39,85.0,30.0,0.042,0.3910333867,1.049914738,594511759503.0,427388562484.0,624186658038.0,0.1719,30808008119.0,11175923978.0,19632084141.0,28518946559.0,0.0,90199895.03,0.023,0.0,6920.037522,-0.04797036577,0.04935704364,906.02,'AA'),
+('BUL','Social Republic of Bulgaria',NULL,40,70.0,45.0,0.032,1.425630292,0.6020977139,260339669070.0,107328668330.0,156749919575.0,0.072,NULL,NULL,NULL,25575000000.0,-7.0,11230466.55,0.01,NULL,13957.56079,-0.09823704587,0.0,595.0,'BBB+'),
+('APE','Average Player Economy',NULL,41,38.0,72.0,0.01676291906,0.5550683024,0.9364532568,6654083823896.0,4227784000595.0,5572142879870.0,0.06019226235,2498579070506.0,1933144953617.0,420118302688.0,1459170264738.0,1574645919817.0,140770307.0,0.01835152374,457142.8571,94772.6802,0.02042982178,0.09920766445,NULL,NULL);
+
+INSERT INTO public.commodities (name,category,unit,base_price,current_price,previous_price,sort_order) VALUES
+('Copper','Base Metals','tonne',8200,8200,8200,0),
+('Aluminium','Base Metals','tonne',2450,2450,2450,1),
+('Nickel','Base Metals','tonne',17800,17800,17800,2),
+('Zinc','Base Metals','tonne',2600,2600,2600,3),
+('Lead','Base Metals','tonne',2100,2100,2100,4),
+('Tin','Base Metals','tonne',29500,29500,29500,5),
+('Iron Ore','Base Metals','tonne',118,118,118,6),
+('Gold','Precious Metals','troy oz',2140,2140,2140,7),
+('Silver','Precious Metals','troy oz',26.4,26.4,26.4,8),
+('Platinum','Precious Metals','troy oz',980,980,980,9),
+('Palladium','Precious Metals','troy oz',1120,1120,1120,10),
+('Rhodium','Precious Metals','troy oz',4600,4600,4600,11),
+('Triangulite','Strategic & Exotic','kg',48000,48000,48000,12),
+('Helium-3','Strategic & Exotic','kg',1400000,1400000,1400000,13),
+('Deuterium','Strategic & Exotic','kg',3200,3200,3200,14),
+('Lithium Carbonate','Strategic & Exotic','tonne',14500,14500,14500,15),
+('Cobalt','Strategic & Exotic','tonne',33500,33500,33500,16),
+('Rare Earth Oxides','Strategic & Exotic','tonne',62000,62000,62000,17),
+('Uranium (U3O8)','Strategic & Exotic','lb',92,92,92,18),
+('Crude Oil','Energy','barrel',78.4,78.4,78.4,19),
+('Natural Gas','Energy','MMBtu',3.15,3.15,3.15,20),
+('Thermal Coal','Energy','tonne',128,128,128,21),
+('Refined Fuel','Energy','barrel',96.2,96.2,96.2,22),
+('Fusion Cell','Energy','unit',520,520,520,23),
+('Wheat','Grains','bushel',6.12,6.12,6.12,24),
+('Maize','Grains','bushel',4.68,4.68,4.68,25),
+('Rice','Grains','cwt',17.2,17.2,17.2,26),
+('Soybeans','Grains','bushel',12.4,12.4,12.4,27),
+('Barley','Grains','tonne',212,212,212,28),
+('Coffee','Softs','lb',1.86,1.86,1.86,29),
+('Cocoa','Softs','tonne',3450,3450,3450,30),
+('Sugar','Softs','lb',0.21,0.21,0.21,31),
+('Cotton','Softs','lb',0.83,0.83,0.83,32),
+('Tea','Softs','kg',3.02,3.02,3.02,33),
+('Rubber','Softs','kg',1.64,1.64,1.64,34),
+('Live Cattle','Livestock & Protein','cwt',178,178,178,35),
+('Lean Hogs','Livestock & Protein','cwt',88,88,88,36),
+('Cultured Protein','Livestock & Protein','tonne',2400,2400,2400,37),
+('Fishmeal','Livestock & Protein','tonne',1520,1520,1520,38),
+('Urea','Fertilisers','tonne',342,342,342,39),
+('Potash','Fertilisers','tonne',298,298,298,40),
+('Phosphate Rock','Fertilisers','tonne',148,148,148,41),
+('Ammonia','Fertilisers','tonne',410,410,410,42),
+('Silicon Wafer','Industrial & Tech','unit',118,118,118,43),
+('Graphene Sheet','Industrial & Tech','m2',640,640,640,44),
+('Superconductor Wire','Industrial & Tech','km',8800,8800,8800,45),
+('Orbital Freight','Industrial & Tech','tonne-to-orbit',1250,1250,1250,46);
