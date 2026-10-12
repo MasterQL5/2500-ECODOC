@@ -1,0 +1,2 @@
+UPDATE public.nations SET currency_group = 'EUR' WHERE acronym = 'EUR - ENG' AND currency_group IS NULL;
+UPDATE public.nations SET currency_group = split_part(acronym, ' - ', 1) WHERE currency_group IS NULL;
